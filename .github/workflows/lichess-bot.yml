@@ -60,24 +60,26 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
+      
       - name: Build wordfish (clone + build + perft)
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
-
           rm -rf wordfish || true
 
+          # clone using PAT stored in secrets (must have read access to FayE75/wordfish)
           git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
 
-
+          # install build deps
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip libjsoncpp-dev librhash0 libssl-dev zlib1g-dev ccache || true
+          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
 
+          # go to repo root
           cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
-
+          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
@@ -85,32 +87,21 @@ jobs:
             echo "⚠️ scripts/net.sh not found — skipping net.sh"
           fi
 
-          # -------------------------------
-
+          # build with clang (recommended for LTO compatibility)
           if [ -d "src" ]; then
             cd src
             echo "🔧 Cleaning previous build artifacts"
             make clean || true
 
-            echo "🔧 Preparing build environment (disable LTO / use clang as linker)"
-            
+            echo "🔧 Building with clang (COMP=clang) - ARCH=x86-64-sse41-popcnt"
             export CC=clang
             export CXX=clang++
-            export LD=clang++
-
-          
+            # prefer lld for clang linking (helps with LTO)
             export LDFLAGS="-fuse-ld=lld ${LDFLAGS:-}"
 
-            export CFLAGS="-O2 -march=x86-64-sse41-popcnt -mtune=native -fomit-frame-pointer -fno-lto"
-            export CXXFLAGS="$CFLAGS"
-
-            set -x
-
-            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang CC="$CC" CXX="$CXX" V=1 2>&1 | tee build.log; then
-              echo "❌ Build failed — showing last 300 lines of build.log"
-              tail -n 300 build.log || true
-
-              echo "🔎 Collecting object file diagnostics (file + readelf or llvm-bcanalyzer hint)"
+            # run make; on failure collect diagnostics about object files
+            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang; then
+              echo "❌ Build failed — collecting object diagnostics (file + readelf)"
               ls -lah *.o || true
               for f in *.o; do
                 echo "---- file info for: $f ----"
@@ -118,27 +109,22 @@ jobs:
                 echo "---- readelf header for: $f ----"
                 readelf -h "$f" || true
               done || true
-
+              # also check tt.o specifically if present
               if [ -f tt.o ]; then
                 echo "---- tt.o details ----"
                 file tt.o || true
                 readelf -h tt.o || true
                 hexdump -C tt.o | sed -n '1,6p' || true
               fi
-
-              echo "ℹ️ If you see 'LLVM IR bitcode' above, runner produced LTO bitcode objects."
-              echo "To keep LTO instead of disabling it, ensure linking uses clang++/lld and llvm tools are installed."
               exit 1
             fi
-
-            set +x
-
             cd ..
           else
             echo "❌ src directory missing; cannot build"
             exit 1
           fi
 
+          # run perft tests (best-effort)
           if [ -d "tests" ]; then
             echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
@@ -147,11 +133,13 @@ jobs:
             echo "⚠️ tests directory missing; skipping perft"
           fi
 
+          # find built binary (search under repo)
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           if [ -z "$BIN_PATH" ]; then
             BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           fi
 
+          # copy binary to top-level engines folder so other steps can use it
           mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
             echo "✅ Found built engine: $BIN_PATH"
@@ -161,6 +149,7 @@ jobs:
           else
             echo "⚠️ No engine binary found after build"
           fi
+
 
       - name: Build Fairy-Stockfish (clone + clang PGO build — bench/testpos workload)
         run: |
