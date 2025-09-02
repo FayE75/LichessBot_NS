@@ -28,7 +28,7 @@ on:
         type: string
         required: false
   schedule:
-    - cron: '0 */6 * * *'  # every 6 hours
+    - cron: '0 */6 * * *'
   push:
     branches: [ main ]
     paths:
@@ -42,7 +42,7 @@ permissions:
 jobs:
   bot-runner:
     runs-on: ubuntu-latest
-    timeout-minutes: 355  # restart just before GitHub limit
+    timeout-minutes: 355
 
     steps:
       - name: Checkout Repository
@@ -60,7 +60,6 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
-      
       - name: Build wordfish (clone + build + perft)
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
@@ -68,109 +67,73 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf wordfish || true
-
-          # clone using PAT stored in secrets (must have read access to FayE75/wordfish)
           git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
-
-          # install build deps
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
-
-          # go to repo root
+          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip libjsoncpp-dev librhash0 libssl-dev zlib1g-dev ccache || true
           cd wordfish || { echo "wordfish dir missing"; exit 1; }
-
-          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
-          else
-            echo "⚠️ scripts/net.sh not found — skipping net.sh"
           fi
-
-          # build with clang (recommended for LTO compatibility)
           if [ -d "src" ]; then
             cd src
-            echo "🔧 Cleaning previous build artifacts"
             make clean || true
-
-            echo "🔧 Building with clang (COMP=clang) - ARCH=x86-64-sse41-popcnt"
             export CC=clang
             export CXX=clang++
-            # prefer lld for clang linking (helps with LTO)
+            export LD=clang++
             export LDFLAGS="-fuse-ld=lld ${LDFLAGS:-}"
-
-            # run make; on failure collect diagnostics about object files
-            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang; then
-              echo "❌ Build failed — collecting object diagnostics (file + readelf)"
+            export CFLAGS="-O2 -mtune=native -fomit-frame-pointer -fno-lto"
+            export CXXFLAGS="$CFLAGS -std=c++17 -fno-exceptions -Wall -Wextra -Wshadow -Wmissing-prototypes -Wconditional-uninitialized"
+            set -x
+            if ! make -j2 build ARCH=x86-64 COMP=clang CC="$CC" CXX="$CXX" V=1 2>&1 | tee build.log; then
+              tail -n 300 build.log || true
               ls -lah *.o || true
               for f in *.o; do
-                echo "---- file info for: $f ----"
                 file "$f" || true
-                echo "---- readelf header for: $f ----"
                 readelf -h "$f" || true
               done || true
-              # also check tt.o specifically if present
               if [ -f tt.o ]; then
-                echo "---- tt.o details ----"
                 file tt.o || true
                 readelf -h tt.o || true
                 hexdump -C tt.o | sed -n '1,6p' || true
               fi
+              echo "If you see 'LLVM IR bitcode' above, the runner produced LTO bitcode objects."
               exit 1
             fi
+            set +x
             cd ..
           else
-            echo "❌ src directory missing; cannot build"
+            echo "src directory missing; cannot build"
             exit 1
           fi
-
-          # run perft tests (best-effort)
           if [ -d "tests" ]; then
-            echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
             cd ..
-          else
-            echo "⚠️ tests directory missing; skipping perft"
           fi
-
-          # find built binary (search under repo)
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           if [ -z "$BIN_PATH" ]; then
             BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           fi
-
-          # copy binary to top-level engines folder so other steps can use it
           mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
-            echo "✅ Found built engine: $BIN_PATH"
             cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
             chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
-            echo "✅ Engine copied to engines/wordfish"
-          else
-            echo "⚠️ No engine binary found after build"
           fi
-
 
       - name: Build Fairy-Stockfish (clone + clang PGO build — bench/testpos workload)
         run: |
           set -euo pipefail
           PERFORM_GENERATE=${PERFORM_GENERATE:-0}
           PGO_RUN_TIME=${PGO_RUN_TIME:-120}
-
           ROOT="$(pwd)"
           rm -rf Fairy-Stockfish || true
           git clone https://github.com/fairy-stockfish/Fairy-Stockfish.git Fairy-Stockfish || { exit 1; }
           if [ ! -d Fairy-Stockfish/src ]; then
             exit 1
           fi
-
           sudo apt-get update -qq
-          sudo apt-get install -y \
-            build-essential clang lld llvm llvm-dev llvm-profdata pkg-config cmake ninja-build git ccache curl unzip \
-            libjsoncpp-dev librhash0 libssl-dev zlib1g-dev python3 python3-pip jq || true
-
+          sudo apt-get install -y build-essential clang lld llvm llvm-dev llvm-profdata pkg-config cmake ninja-build git ccache curl unzip libjsoncpp-dev librhash0 libssl-dev zlib1g-dev python3 python3-pip jq || true
           cd Fairy-Stockfish/src
-
           if command -v ccache >/dev/null 2>&1; then
             export CC="ccache clang"
             export CXX="ccache clang++"
@@ -179,57 +142,43 @@ jobs:
             export CXX="clang++"
           fi
           export CCACHE_DIR="${HOME}/.ccache"
-
           COMMON_FLAGS="-O3 -march=native -mtune=native -flto=thin -funroll-loops -fomit-frame-pointer"
           export CFLAGS="$COMMON_FLAGS"
           export CXXFLAGS="$COMMON_FLAGS"
-
           FEN_CANDIDATES="/tmp/fairy_fens.txt"
           : > "$FEN_CANDIDATES" || true
-
-          grep -RInhoP '^[rnbqkpRNBQKP1-8/]{8,}\s+[wb]\s+[^ ]+\s+[^ ]+\s+\d+\s+\d+' .. 2>/dev/null \
-            | sed -E 's/^[^:]+://g' | sort -u > "$FEN_CANDIDATES" || true
-
+          grep -RInhoP '^[rnbqkpRNBQKP1-8/]{8,}\s+[wb]\s+[^ ]+\s+[^ ]+\s+\d+\s+\d+' .. 2>/dev/null | sed -E 's/^[^:]+://g' | sort -u > "$FEN_CANDIDATES" || true
           if [ ! -s "$FEN_CANDIDATES" ]; then
-            grep -RInhoP '([rnbqkpRNBQKP1-8/]{8,}/[rnbqkpRNBQKP1-8/]{7,})\s+[wb]' .. 2>/dev/null \
-              | sed -E 's/^[^:]+://;s/\r$//' | sort -u > "$FEN_CANDIDATES" || true
+            grep -RInhoP '([rnbqkpRNBQKP1-8/]{8,}/[rnbqkpRNBQKP1-8/]{7,})\s+[wb]' .. 2>/dev/null | sed -E 's/^[^:]+://;s/\r$//' | sort -u > "$FEN_CANDIDATES" || true
           fi
-
           if [ -s "$FEN_CANDIDATES" ]; then
             mapfile -t FENS < "$FEN_CANDIDATES"
           else
             FENS=()
           fi
-
           if [ "$PERFORM_GENERATE" -eq 1 ]; then
             INSTR_EXTRAS="-fprofile-instr-generate -fcoverage-mapping"
             INSTR_LDFLAGS="-fprofile-instr-generate -fcoverage-mapping -flto=thin"
-            if ! make -j$(nproc) profile-build ARCH=x86-64-bmi2 COMP=clang \
-                 EXTRACXXFLAGS="${INSTR_EXTRAS}" EXTRALDFLAGS="${INSTR_LDFLAGS}"; then
+            if ! make -j$(nproc) profile-build ARCH=x86-64-bmi2 COMP=clang EXTRACXXFLAGS="${INSTR_EXTRAS}" EXTRALDFLAGS="${INSTR_LDFLAGS}"; then
               exit 1
             fi
-
             instr_bin=$(find . -maxdepth 6 -type f -executable \( -iname 'fairy*' -o -iname 'stockfish*' -o -iname 'fsf*' \) -print -quit || true)
             if [ -z "$instr_bin" ]; then
               exit 1
             fi
-
             export LLVM_PROFILE_FILE="${HOME}/pgo-fairy-%p.profraw"
             START_TS=$(date +%s)
             END_TS=$((START_TS + PGO_RUN_TIME))
-
             BENCH_SUPPORTED=0
             probe_out=$("${instr_bin}" bench 2>&1 || true)
             if ! printf "%s" "$probe_out" | grep -qi "Unknown command\|unknown command\|usage"; then
               BENCH_SUPPORTED=1
             fi
-
             PERFT_SUPPORTED=0
             probe_out=$({ printf "perft 1\nquit\n" | "${instr_bin}" 2>&1 || true; } )
             if ! printf "%s" "$probe_out" | grep -qi "Unknown command"; then
               PERFT_SUPPORTED=1
             fi
-
             run_workload_from_fens() {
               local fen
               local idx=0
@@ -240,19 +189,16 @@ jobs:
                 else
                   THREADS="$(nproc 2>/dev/null || echo 1)"
                   HASH_MB=256
-                  printf "uci\nsetoption name Threads value %d\nsetoption name Hash value %d\nucinewgame\nisready\nposition fen %s\ngo depth 6\nquit\n" \
-                    "$THREADS" "$HASH_MB" "$fen" | "${instr_bin}" 2>&1 | sed '/^option name/ d' > /tmp/pgo_fairy_perft_out.txt || true
+                  printf "uci\nsetoption name Threads value %d\nsetoption name Hash value %d\nucinewgame\nisready\nposition fen %s\ngo depth 6\nquit\n" "$THREADS" "$HASH_MB" "$fen" | "${instr_bin}" 2>&1 | sed '/^option name/ d' > /tmp/pgo_fairy_perft_out.txt || true
                 fi
                 idx=$((idx+1))
                 sleep 0.05
                 now=$(date +%s); if [ $now -ge $END_TS ]; then break; fi
               done
             }
-
             run_workload_bench() {
               timeout 30 "${instr_bin}" bench > /tmp/pgo_fairy_bench_instrumented.txt 2>&1 || true
             }
-
             run_workload_startpos() {
               THREADS="$(nproc 2>/dev/null || echo 1)"
               HASH_MB=256
@@ -261,7 +207,6 @@ jobs:
                 sleep 0.05
               done
             }
-
             if [ "${#FENS[@]}" -gt 0 ]; then
               while [ $(date +%s) -lt $END_TS ]; do
                 run_workload_from_fens
@@ -276,20 +221,17 @@ jobs:
                 run_workload_startpos
               fi
             fi
-
             if compgen -G "${HOME}/pgo-fairy-*.profraw" >/dev/null 2>&1; then
               if command -v llvm-profdata >/dev/null 2>&1; then
                 llvm-profdata merge -o "${HOME}/merged-fairy.profdata" ${HOME}/pgo-fairy-*.profraw || true
               fi
             fi
           fi
-
           make clean || true
           if [ -f "${HOME}/merged-fairy.profdata" ] && command -v llvm-profdata >/dev/null 2>&1; then
             USE_EXTRAS="-fprofile-instr-use=${HOME}/merged-fairy.profdata -fcoverage-mapping"
             USE_LDFLAGS="-fprofile-instr-use=${HOME}/merged-fairy.profdata -flto=thin"
-            if ! make -j$(nproc) profile-build ARCH=x86-64-bmi2 COMP=clang \
-                 EXTRACXXFLAGS="${USE_EXTRAS}" EXTRALDFLAGS="${USE_LDFLAGS}"; then
+            if ! make -j$(nproc) profile-build ARCH=x86-64-bmi2 COMP=clang EXTRACXXFLAGS="${USE_EXTRAS}" EXTRALDFLAGS="${USE_LDFLAGS}"; then
               if ! make -j$(nproc) build ARCH=x86-64-bmi2 COMP=clang; then
                 exit 1
               fi
@@ -301,7 +243,6 @@ jobs:
               fi
             fi
           fi
-
           found=$(find . -maxdepth 6 -type f -executable \( -iname 'fairy*' -o -iname 'stockfish*' -o -iname 'fsf*' \) -print -quit || true)
           if [ -z "$found" ]; then
             found=$(find . -maxdepth 6 -type f -executable -print -quit || true)
@@ -348,12 +289,10 @@ jobs:
           TOUR_ID="${{ github.event.inputs.tournament_id }}"
           TEAM_ID="${{ github.event.inputs.team_id }}"
           PASSWORD="${{ github.event.inputs.password }}"
-
           if [[ "$MODE" == "matchmaking" ]]; then
               CMD="$CMD_BASE matchmaking"
               echo "🤖 Running command: $CMD"
               eval "$CMD"
-
           elif [[ "$MODE" == "tournament" ]]; then
               if [[ -z "$TOUR_ID" ]]; then
                   echo "⚠️ Tournament ID missing. Skipping."
@@ -361,11 +300,9 @@ jobs:
                   ARGS="$TOUR_ID"
                   [[ -n "$TEAM_ID" ]] && ARGS="$ARGS $TEAM_ID"
                   [[ -n "$PASSWORD" ]] && ARGS="$ARGS $PASSWORD"
-
                   echo "🤖 Joining tournament: $ARGS"
                   eval "$CMD_BASE \"tournament $ARGS\""
               fi
-
           else
               echo "⚠️ Mode not recognized. Running normal mode."
               eval "$CMD_BASE"
