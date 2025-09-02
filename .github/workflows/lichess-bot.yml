@@ -60,61 +60,47 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
-      - name: Build wordfish (clone + build + perft)
+      - name: Build wordfish (clone + build + perft) (LTO mode)
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
           rm -rf wordfish || true
-
-          # clone using PAT stored in secrets (must have read access to FayE75/wordfish)
           git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
-
-          # install build deps
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
+          # install clang/lld/llvm tools; adjust package names if you want a specific version (e.g. clang-18)
+          sudo apt-get install -y build-essential clang lld llvm llvm-dev llvm-toolchain cmake pkg-config ninja-build curl unzip || true
 
-          # go to repo root
           cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
-          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
-          else
-            echo "⚠️ scripts/net.sh not found — skipping net.sh"
           fi
 
-          # build with clang (recommended for LTO compatibility)
           if [ -d "src" ]; then
             cd src
-            echo "🔧 Cleaning previous build artifacts"
             make clean || true
 
-            echo "🔧 Building with clang (COMP=clang) - ARCH=x86-64-sse41-popcnt"
+            echo "🔧 Building with clang + lld (LTO-compatible)."
             export CC=clang
             export CXX=clang++
-            # prefer lld for clang linking (helps with LTO)
+            export LD=clang++
+            export AR=llvm-ar
+            export RANLIB=llvm-ranlib
             export LDFLAGS="-fuse-ld=lld ${LDFLAGS:-}"
+            mkdir -p ../build_logs
 
-            # run make; on failure collect diagnostics about object files
-            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang; then
-              echo "❌ Build failed — collecting object diagnostics (file + readelf)"
+            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang 2>&1 | tee ../build_logs/build.log; then
+              echo "❌ Build failed — showing last 400 lines of build.log"
+              tail -n 400 ../build_logs/build.log || true
+              echo "---- object file summary ----"
               ls -lah *.o || true
-              for f in *.o; do
+              for f in *.o 2>/dev/null || true; do
                 echo "---- file info for: $f ----"
                 file "$f" || true
-                echo "---- readelf header for: $f ----"
-                readelf -h "$f" || true
               done || true
-              # also check tt.o specifically if present
-              if [ -f tt.o ]; then
-                echo "---- tt.o details ----"
-                file tt.o || true
-                readelf -h tt.o || true
-                hexdump -C tt.o | sed -n '1,6p' || true
-              fi
               exit 1
             fi
             cd ..
@@ -123,28 +109,16 @@ jobs:
             exit 1
           fi
 
-          # run perft tests (best-effort)
+          # tests + copy binary (same as before)
           if [ -d "tests" ]; then
-            echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
             cd ..
-          else
-            echo "⚠️ tests directory missing; skipping perft"
           fi
-
-          # find built binary (search under repo)
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          if [ -z "$BIN_PATH" ]; then
-            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          fi
-
-          # copy binary to top-level engines folder so other steps can use it
           mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
-            echo "✅ Found built engine: $BIN_PATH"
             cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
             chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
-            echo "✅ Engine copied to engines/wordfish"
           else
             echo "⚠️ No engine binary found after build"
           fi
