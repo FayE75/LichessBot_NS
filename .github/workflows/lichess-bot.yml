@@ -47,10 +47,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          submodules: recursive
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -71,14 +67,16 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf wordfish || true
+
+          # clone using PAT stored in secrets (must have read access to FayE75/wordfish)
           git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
 
-          # install build deps (best-effort; flavor may be adjusted for your project)
+          # install build deps
           sudo apt-get update -qq
           sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
 
           # go to repo root
-          cd wordfish
+          cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
           # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
           if [ -f "scripts/net.sh" ]; then
@@ -88,19 +86,44 @@ jobs:
             echo "⚠️ scripts/net.sh not found — skipping net.sh"
           fi
 
-          # build (tutor command)
+          # build with clang (recommended for LTO compatibility)
           if [ -d "src" ]; then
             cd src
-            echo "🔧 Running make -j2 build ARCH=x86-64-sse41-popcnt"
-            # run make; fail the step if build fails
-            make -j2 build ARCH=x86-64-sse41-popcnt
+            echo "🔧 Cleaning previous build artifacts"
+            make clean || true
+
+            echo "🔧 Building with clang (COMP=clang) - ARCH=x86-64-sse41-popcnt"
+            export CC=clang
+            export CXX=clang++
+            # prefer lld for clang linking (helps with LTO)
+            export LDFLAGS="-fuse-ld=lld ${LDFLAGS:-}"
+
+            # run make; on failure collect diagnostics about object files
+            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang; then
+              echo "❌ Build failed — collecting object diagnostics (file + readelf)"
+              ls -lah *.o || true
+              for f in *.o; do
+                echo "---- file info for: $f ----"
+                file "$f" || true
+                echo "---- readelf header for: $f ----"
+                readelf -h "$f" || true
+              done || true
+              # also check tt.o specifically if present
+              if [ -f tt.o ]; then
+                echo "---- tt.o details ----"
+                file tt.o || true
+                readelf -h tt.o || true
+                hexdump -C tt.o | sed -n '1,6p' || true
+              fi
+              exit 1
+            fi
             cd ..
           else
             echo "❌ src directory missing; cannot build"
             exit 1
           fi
 
-          # run perft tests (best-effort, won't fail whole job if perft fails)
+          # run perft tests (best-effort)
           if [ -d "tests" ]; then
             echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
@@ -112,7 +135,6 @@ jobs:
           # find built binary (search under repo)
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           if [ -z "$BIN_PATH" ]; then
-            # try deeper search in src
             BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
           fi
 
@@ -131,9 +153,7 @@ jobs:
         run: |
           mkdir -p engines
           sudo apt-get update && sudo apt-get install -y unzip || true
-          # If we have engines placed already by previous step, ensure they are executable
           if [ -f "engines/wordfish" ]; then chmod +x engines/wordfish; fi
-          if [ -f "engines/stockfish" ]; then chmod +x engines/stockfish; fi
           if [ -f "engines/fsf" ]; then chmod +x engines/fsf; fi
           if [ -f "engines/ShashChess39" ]; then chmod +x engines/ShashChess39; fi
 
@@ -190,6 +210,4 @@ jobs:
 
       - name: Auto-Restart After Timeout
         run: |
-          # NOTE: This step can't control the previous step's process.
-          # If you want an auto-restart supervisor, run inside the Launch Bot step (loop + timeout).
           echo "Auto-restart step present but control must be implemented inside the bot process/launcher if needed."
