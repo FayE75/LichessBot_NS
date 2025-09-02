@@ -60,16 +60,77 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
+      - name: Build wordfish (clone + build + perft)
+        env:
+          WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          rm -rf Omega || true
+          # clone using PAT stored in secrets (read-only token recommended)
+          git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git Omega
+
+          # install build deps (best-effort; flavor may be adjusted for your project)
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
+
+          # go to repo root
+          cd Omega
+
+          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
+          if [ -f "scripts/net.sh" ]; then
+            cd src && sh ../scripts/net.sh || true
+            cd ..
+          else
+            echo "⚠️ scripts/net.sh not found — skipping net.sh"
+          fi
+
+          # build (tutor command)
+          if [ -d "src" ]; then
+            cd src
+            echo "🔧 Running make -j2 build ARCH=x86-64-sse41-popcnt"
+            # run make; fail the step if build fails
+            make -j2 build ARCH=x86-64-sse41-popcnt
+            cd ..
+          else
+            echo "❌ src directory missing; cannot build"
+            exit 1
+          fi
+
+          # run perft tests (best-effort, won't fail whole job if perft fails)
+          if [ -d "tests" ]; then
+            echo "▶️ Running tests/perft.sh (best-effort)"
+            cd tests && bash perft.sh || true
+            cd ..
+          else
+            echo "⚠️ tests directory missing; skipping perft"
+          fi
+
+          # find built binary (search under repo)
+          BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          if [ -z "$BIN_PATH" ]; then
+            # try deeper search in src
+            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          fi
+
+          # copy binary to top-level engines folder so other steps can use it
+          mkdir -p "${GITHUB_WORKSPACE}/engines"
+          if [ -n "$BIN_PATH" ]; then
+            echo "✅ Found built engine: $BIN_PATH"
+            cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
+            chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
+            echo "✅ Engine copied to engines/wordfish"
+          else
+            echo "⚠️ No engine binary found after build"
+          fi
+
       - name: Setup Engines
         run: |
           mkdir -p engines
-          sudo apt-get update && sudo apt-get install -y unzip
-          # Stockfish
-          curl -L -o stockfish.zip http://abrok.eu/stockfish/latest/linux/stockfish_x64_modern.zip
-          unzip -o stockfish.zip -d engines/
-          mv engines/stockfish_* engines/stockfish
-          chmod +x engines/stockfish
-          # Other engines
+          sudo apt-get update && sudo apt-get install -y unzip || true
+          # If we have engines placed already by previous step, ensure they are executable
+          if [ -f "engines/wordfish" ]; then chmod +x engines/wordfish; fi
+          if [ -f "engines/stockfish" ]; then chmod +x engines/stockfish; fi
           if [ -f "engines/fsf" ]; then chmod +x engines/fsf; fi
           if [ -f "engines/ShashChess39" ]; then chmod +x engines/ShashChess39; fi
 
@@ -78,16 +139,19 @@ jobs:
           LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
         run: |
           python3 << 'EOF'
-          import os, yaml
+          import os, yaml, sys
           token = os.environ.get("LICHESS_TOKEN")
           if not token:
               print("ERROR: LICHESS_TOKEN secret is missing!")
-              exit(1)
-          with open("config.yml","r") as f:
-              config = yaml.safe_load(f) or {}
-          config["token"] = token
-          with open("config.yml","w") as f:
-              yaml.dump(config,f, default_flow_style=False)
+              sys.exit(1)
+          cfg_path = "config.yml"
+          cfg = {}
+          if os.path.exists(cfg_path):
+              with open(cfg_path,"r") as f:
+                  cfg = yaml.safe_load(f) or {}
+          cfg["token"] = token
+          with open(cfg_path,"w") as f:
+              yaml.dump(cfg,f, default_flow_style=False)
           print("✅ Token injected successfully")
           EOF
 
@@ -108,13 +172,11 @@ jobs:
               if [[ -z "$TOUR_ID" ]]; then
                   echo "⚠️ Tournament ID missing. Skipping."
               else
-                  # Construct CLI arguments correctly
                   ARGS="$TOUR_ID"
                   [[ -n "$TEAM_ID" ]] && ARGS="$ARGS $TEAM_ID"
                   [[ -n "$PASSWORD" ]] && ARGS="$ARGS $PASSWORD"
 
                   echo "🤖 Joining tournament: $ARGS"
-                  # pass tournament as real argument
                   eval "$CMD_BASE \"tournament $ARGS\""
               fi
 
@@ -125,7 +187,6 @@ jobs:
 
       - name: Auto-Restart After Timeout
         run: |
-          BOT_PID=$!
-          ( sleep 20700 && echo "⏰ Time's up. Restarting bot..." && kill -SIGTERM $BOT_PID ) &
-          wait $BOT_PID
-          echo "Bot ended cleanly."
+          # NOTE: This step can't control the previous step's process.
+          # If you want an auto-restart supervisor, run inside the Launch Bot step (loop + timeout).
+          echo "Auto-restart step present but control must be implemented inside the bot process/launcher if needed."
