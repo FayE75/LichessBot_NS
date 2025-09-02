@@ -78,6 +78,9 @@ jobs:
           if [ -d "src" ]; then
             cd src
             make clean || true
+            find . -type f -print0 | xargs -0 grep -Il "x86-64-sse41-popcnt" | xargs -r sed -i 's/x86-64-sse41-popcnt/x86-64/g' || true
+            find . -type f -print0 | xargs -0 grep -Il -- '-flto' | xargs -r sed -i "s/-flto=[^[:space:]]*//g; s/-flto//g" || true
+            find . -type f -print0 | xargs -0 grep -Il -- '-march=' | xargs -r sed -i 's/-march=[^[:space:]]*//g' || true
             export CC=clang
             export CXX=clang++
             export LD=clang++
@@ -85,19 +88,13 @@ jobs:
             export CFLAGS="-O2 -mtune=native -fomit-frame-pointer -fno-lto"
             export CXXFLAGS="$CFLAGS -std=c++17 -fno-exceptions -Wall -Wextra -Wshadow -Wmissing-prototypes -Wconditional-uninitialized"
             set -x
-            if ! make -j2 build ARCH=x86-64 COMP=clang CC="$CC" CXX="$CXX" V=1 2>&1 | tee build.log; then
+            if ! make -j2 build ARCH=x86-64 COMP=clang CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" V=1 2>&1 | tee build.log; then
               tail -n 300 build.log || true
               ls -lah *.o || true
               for f in *.o; do
                 file "$f" || true
                 readelf -h "$f" || true
               done || true
-              if [ -f tt.o ]; then
-                file tt.o || true
-                readelf -h tt.o || true
-                hexdump -C tt.o | sed -n '1,6p' || true
-              fi
-              echo "If you see 'LLVM IR bitcode' above, the runner produced LTO bitcode objects."
               exit 1
             fi
             set +x
