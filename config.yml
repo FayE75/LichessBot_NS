@@ -3,7 +3,7 @@ token: "XXXXXXXXXXXXXXXXXXX"         # Lichess OAuth2 Token.
 engines:
   bullet:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "sf"                     # Binary name of the engine to use.
+    name: "wordfish"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 5.0         # Optimized for bullet games.
@@ -16,7 +16,7 @@ engines:
     limits:
   blitz:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "sf"                     # Binary name of the engine to use.
+    name: "wordfish"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 6.5         # Optimized for bullet games.
@@ -25,11 +25,11 @@ engines:
       Hash: 8192                           # Increased hash for better position evaluation.
       Move Overhead: 250                  # Reduced for faster bullet moves.
       Minimum Thinking Time: 0
-      Slow Mover: 10
+      Slow Mover: 60
     limits:
   standard:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "sf"                     # Binary name of the engine to use.
+    name: "wordfish"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 5.0         # Optimized for bullet games.
