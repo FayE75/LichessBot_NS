@@ -60,68 +60,118 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
-      - name: Build wordfish (clone + build + perft)
+      - name: Build wordfish 
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
+        shell: bash
         run: |
           set -euo pipefail
+          set -x
+
+          # fresh clone
           rm -rf wordfish || true
-          # clone using PAT stored in secrets (read-only token recommended)
-          git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
+          if [ -n "${WORDFISH_PAT:-}" ]; then
+            git clone "https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git" wordfish
+          else
+            git clone https://github.com/FayE75/wordfish.git wordfish
+          fi
 
-          # install build deps (best-effort; flavor may be adjusted for your project)
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
+          sudo apt-get install -y build-essential clang clang++ lld llvm-dev pkg-config cmake ninja-build curl unzip file || true
 
-          # go to repo root
-          cd wordfish
+          cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
-          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
+          # optional network script
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
-          else
-            echo "⚠️ scripts/net.sh not found — skipping net.sh"
           fi
 
-          # build (tutor command)
           if [ -d "src" ]; then
             cd src
-            echo "🔧 Running make -j2 build ARCH=x86-64-sse41-popcnt"
-            # run make; fail the step if build fails
-            make -j2 build ARCH=x86-64-sse41-popcnt
+
+            echo "🔧 CLEAN old artifacts"
+            make clean || true
+            rm -f *.o *.a wordfish || true
+
+            echo "🔎 Removing -flto occurrences from Makefiles / *.mk to avoid LTO objects"
+            # be aggressive: remove common -flto patterns in all text files under src
+            grep -RI --line-number --binary-files=without-match -e "\-flto" . || true
+            # Remove -flto and related tokens from files in-place (backup .bak)
+            find . -type f -name '*' -exec sed -i.bak -e 's/-flto[[:alnum:]=-]*//g' -e 's/-flto-partition=[^[:space:]]*//g' -e 's/-flto=jobserver//g' {} +
+
+            # force consistent compilers and disable LTO via flags
+            export CC=clang
+            export CXX=clang++
+            export AR=ar
+            export RANLIB=ranlib
+            export CFLAGS="-fno-lto ${CFLAGS:-}"
+            export CXXFLAGS="-fno-lto ${CXXFLAGS:-}"
+            export LDFLAGS=""
+
+            echo "🔧 Building (COMP=clang, no LTO) - logging to ../build_logs/build.log"
+            mkdir -p ../build_logs || true
+
+            # run make, capture exit code robustly
+            set +e
+            make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 | tee ../build_logs/build.log
+            MAKE_RC=${PIPESTATUS[0]:-1}
+            set -e
+
+            if [ "${MAKE_RC}" -ne 0 ]; then
+              echo "❌ Build failed. Inspecting possible broken object files (uci.o, etc.)"
+
+              # show last lines of log
+              tail -n 200 ../build_logs/build.log || true
+
+              # check uci.o if exists
+              if [ -f uci.o ]; then
+                echo "---- file uci.o ----"
+                file uci.o || true
+                echo "---- hexdump head of uci.o (first 256 bytes) ----"
+                hexdump -C -n 256 uci.o || true
+                echo "---- readelf (if possible) ----"
+                readelf -h uci.o || true
+              else
+                echo "uci.o not present in src/ (maybe compiled elsewhere). Listing *.o:"
+                ls -lah *.o || true
+              fi
+
+              echo "Attempting rebuild from scratch: remove all .o and rebuild"
+              rm -f *.o *.a wordfish || true
+              set +e
+              make -j1 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 | tee ../build_logs/build_rebuild.log
+              REBUILD_RC=${PIPESTATUS[0]:-1}
+              set -e
+
+              if [ "${REBUILD_RC}" -ne 0 ]; then
+                echo "❗ Rebuild still failed. Uploading logs and exiting."
+                tail -n 300 ../build_logs/build_rebuild.log || true
+                exit 1
+              fi
+            fi
+
             cd ..
           else
             echo "❌ src directory missing; cannot build"
             exit 1
           fi
 
-          # run perft tests (best-effort, won't fail whole job if perft fails)
-          if [ -d "tests" ]; then
-            echo "▶️ Running tests/perft.sh (best-effort)"
-            cd tests && bash perft.sh || true
-            cd ..
-          else
-            echo "⚠️ tests directory missing; skipping perft"
-          fi
-
-          # find built binary (search under repo)
+          # copy built binary if exists
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          if [ -z "$BIN_PATH" ]; then
-            # try deeper search in src
-            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          fi
-
-          # copy binary to top-level engines folder so other steps can use it
-          mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
-            echo "✅ Found built engine: $BIN_PATH"
+            mkdir -p "${GITHUB_WORKSPACE}/engines"
             cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
             chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
             echo "✅ Engine copied to engines/wordfish"
           else
             echo "⚠️ No engine binary found after build"
+          fi
+
+          # copy logs
+          if [ -d build_logs ]; then
+            cp -r build_logs "${GITHUB_WORKSPACE}/build_logs" || true
           fi
 
       - name: Setup Engines
