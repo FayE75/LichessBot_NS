@@ -47,12 +47,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
-      - name: a
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-prepare
-          path: build_logs || true
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
