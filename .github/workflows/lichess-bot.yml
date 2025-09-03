@@ -59,111 +59,15 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
           
-      - name: Build wordfish (no-LTO, verbose - fixed)
-        env:
-          WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
-          GITHUB_WORKSPACE: ${{ github.workspace }}
-        shell: bash
+      - name: Debug: show generated temp scripts
         run: |
-          set -euo pipefail
-          rm -rf wordfish || true
-
-          # Clone (gunakan PAT kalau tersedia)
-          if [ -n "${WORDFISH_PAT:-}" ]; then
-            git clone "https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git" wordfish
-          else
-            git clone https://github.com/FayE75/wordfish.git wordfish
-          fi
-
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
-
-          cd wordfish || { echo "wordfish dir missing"; exit 1; }
-
-          if [ -f "scripts/net.sh" ]; then
-            cd src && sh ../scripts/net.sh || true
-            cd ..
-          fi
-
-          if [ -d "src" ]; then
-            cd src
-            mkdir -p ../build_logs
-
-            echo "🔧 Cleaning"
-            make clean || true
-
-            echo "🔧 Forcing NON-LTO build: setting -fno-lto and removing -flto occurrences if present"
-            export CC=clang
-            export CXX=clang++
-            export AR=ar
-            export RANLIB=ranlib
-            export CFLAGS="-fno-lto ${CFLAGS:-}"
-            export CXXFLAGS="-fno-lto ${CXXFLAGS:-}"
-            export LDFLAGS="${LDFLAGS:-}"
-
-            if grep -R --line-number --silent "\-flto" .; then
-              echo "⚠ Found -flto in Makefiles — stripping occurrences"
-              find . -type f -name 'Makefile*' -exec sed -i.bak 's/-flto//g' {} +
-            fi
-
-            echo "🔧 Building (no-LTO) - logging to ../build_logs/build.log"
-
-            # --- Robust build: run make, tee output, then check exit code of `make`
-            set +e
-            make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log
-            MAKE_RC=${PIPESTATUS[0]}
-            set -e
-
-            if [ "${MAKE_RC}" -ne 0 ]; then
-              echo "❌ Build failed — showing last 300 lines of build.log"
-              tail -n 300 ../build_logs/build.log || true
-
-              echo "---- object files summary ----"
-              ls -lah *.o || true
-              for f in *.o 2>/dev/null || true; do
-                echo "---- file info for: $f ----"
-                file "$f" || true
-              done || true
-
-              echo "❗ Build failed. Build logs saved to wordfish/build_logs (artifact upload step should capture it)."
-              exit 1
-            fi
-
-            cd ..
-          else
-            echo "❌ src directory missing; cannot build"
-            exit 1
-          fi
-
-          # run perft tests (best-effort)
-          if [ -d "tests" ]; then
-            echo "▶️ Running tests/perft.sh (best-effort)"
-            cd tests && bash perft.sh || true
-            cd ..
-          else
-            echo "⚠️ tests directory missing; skipping perft"
-          fi
-
-          BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          if [ -z "$BIN_PATH" ]; then
-            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          fi
-
-          mkdir -p "${GITHUB_WORKSPACE}/engines"
-          if [ -n "$BIN_PATH" ]; then
-            echo "✅ Found built engine: $BIN_PATH"
-            cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
-            chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
-            echo "✅ Engine copied to engines/wordfish"
-          else
-            echo "⚠️ No engine binary found after build"
-          fi
-
-          if [ -d build_logs ]; then
-            cp -r build_logs "${GITHUB_WORKSPACE}/build_logs" || true
-          fi
-
-
+          echo "Listing /home/runner/work/_temp/*.sh"
+          ls -lah /home/runner/work/_temp/*.sh || true
+          for f in /home/runner/work/_temp/*.sh; do
+            echo "---- $f ----"
+            sed -n '1,200p' "$f" || true
+            echo
+          done
 
       - name: Upload wordfish build logs
         if: always()
