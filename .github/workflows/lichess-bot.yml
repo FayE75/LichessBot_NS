@@ -47,6 +47,7 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -58,30 +59,78 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install tenacity pyyaml
-          
-      - name: Debug: show generated temp scripts
+
+      - name: Build wordfish (clone + build + perft)
+        env:
+          WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
-          echo "Listing /home/runner/work/_temp/*.sh"
-          ls -lah /home/runner/work/_temp/*.sh || true
-          for f in /home/runner/work/_temp/*.sh; do
-            echo "---- $f ----"
-            sed -n '1,200p' "$f" || true
-            echo
-          done
+          set -euo pipefail
+          rm -rf wordfish || true
+          # clone using PAT stored in secrets (read-only token recommended)
+          git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
 
-      - name: Upload wordfish build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wordfish-build-logs
-          path: wordfish/build_logs
+          # install build deps (best-effort; flavor may be adjusted for your project)
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
 
+          # go to repo root
+          cd wordfish
+
+          # run network/setup script (tutor: cd src && sh ../scripts/net.sh)
+          if [ -f "scripts/net.sh" ]; then
+            cd src && sh ../scripts/net.sh || true
+            cd ..
+          else
+            echo "⚠️ scripts/net.sh not found — skipping net.sh"
+          fi
+
+          # build (tutor command)
+          if [ -d "src" ]; then
+            cd src
+            echo "🔧 Running make -j2 build ARCH=x86-64-sse41-popcnt"
+            # run make; fail the step if build fails
+            make -j2 build ARCH=x86-64-sse41-popcnt
+            cd ..
+          else
+            echo "❌ src directory missing; cannot build"
+            exit 1
+          fi
+
+          # run perft tests (best-effort, won't fail whole job if perft fails)
+          if [ -d "tests" ]; then
+            echo "▶️ Running tests/perft.sh (best-effort)"
+            cd tests && bash perft.sh || true
+            cd ..
+          else
+            echo "⚠️ tests directory missing; skipping perft"
+          fi
+
+          # find built binary (search under repo)
+          BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          if [ -z "$BIN_PATH" ]; then
+            # try deeper search in src
+            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          fi
+
+          # copy binary to top-level engines folder so other steps can use it
+          mkdir -p "${GITHUB_WORKSPACE}/engines"
+          if [ -n "$BIN_PATH" ]; then
+            echo "✅ Found built engine: $BIN_PATH"
+            cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
+            chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
+            echo "✅ Engine copied to engines/wordfish"
+          else
+            echo "⚠️ No engine binary found after build"
+          fi
 
       - name: Setup Engines
         run: |
           mkdir -p engines
           sudo apt-get update && sudo apt-get install -y unzip || true
+          # If we have engines placed already by previous step, ensure they are executable
           if [ -f "engines/wordfish" ]; then chmod +x engines/wordfish; fi
+          if [ -f "engines/stockfish" ]; then chmod +x engines/stockfish; fi
           if [ -f "engines/fsf" ]; then chmod +x engines/fsf; fi
           if [ -f "engines/ShashChess39" ]; then chmod +x engines/ShashChess39; fi
 
@@ -138,4 +187,6 @@ jobs:
 
       - name: Auto-Restart After Timeout
         run: |
+          # NOTE: This step can't control the previous step's process.
+          # If you want an auto-restart supervisor, run inside the Launch Bot step (loop + timeout).
           echo "Auto-restart step present but control must be implemented inside the bot process/launcher if needed."
