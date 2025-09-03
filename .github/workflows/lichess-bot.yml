@@ -64,61 +64,74 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install tenacity pyyaml
-      - name: Build wordfish (no-LTO, verbose) + upload logs
+      - name: Build wordfish (no-LTO, verbose)
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
-          
         run: |
           set -euo pipefail
           rm -rf wordfish || true
-          git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
+
+          # Clone (gunakan PAT jika tersedia, fallback ke public clone)
+          if [ -n "${WORDFISH_PAT:-}" ]; then
+            git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
+          else
+            git clone https://github.com/FayE75/wordfish.git wordfish
+          fi
+
+          # install build deps
           sudo apt-get update -qq
           sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
 
           cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
-          # if project has scripts/net.sh
+          # optional: run scripts/net.sh if present (best-effort)
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
           fi
 
-          # Enter src
+          # Build in src
           if [ -d "src" ]; then
             cd src
             mkdir -p ../build_logs
 
-            echo "🔧 Forcing NON-LTO build: set -fno-lto and strip -flto from Makefiles if present"
+            echo "🔧 Cleaning"
+            make clean || true
+
+            echo "🔧 Forcing NON-LTO build: setting -fno-lto and removing -flto occurrences if present"
             export CC=clang
             export CXX=clang++
+            export AR=ar
+            export RANLIB=ranlib
             export CFLAGS="-fno-lto ${CFLAGS:-}"
             export CXXFLAGS="-fno-lto ${CXXFLAGS:-}"
             export LDFLAGS="${LDFLAGS:-}"
 
-            # Try to remove any -flto occurrences in Makefile(s) as a fallback
-            # (some projects hardcode -flto in Makefile)
+            # If Makefile(s) hardcode -flto, try removing occurrences in-place (backup .bak)
             if grep -R --line-number --silent "\-flto" .; then
-              echo "⚠ Detected -flto in source Makefiles; stripping occurrences (in-place)"
-              # backup then remove -flto flags
+              echo "⚠ Found -flto in Makefiles — stripping occurrences"
               find . -type f -name 'Makefile*' -exec sed -i.bak 's/-flto//g' {} +
             fi
 
-            echo "🔧 Running make verbose (V=1) — logs -> ../build_logs/build.log"
+            # Run verbose build and capture log
+            echo "🔧 Building (no-LTO) - logging to ../build_logs/build.log"
             if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log; then
-              echo "❌ Build failed — showing last 400 lines of build.log"
-              tail -n 400 ../build_logs/build.log || true
+              echo "❌ Build failed — showing last 300 lines of build.log"
+              tail -n 300 ../build_logs/build.log || true
+
               echo "---- object files summary ----"
               ls -lah *.o || true
               for f in *.o 2>/dev/null || true; do
                 echo "---- file info for: $f ----"
                 file "$f" || true
               done || true
-              # upload logs as action artifact for deeper inspection
-              echo "Uploading build logs as artifact..."
-              # use curl to the actions artifact API is complex here; better to fail and rely on next step to upload
+
+              echo "❗ Build failed. Uploading logs as artifact is next step (or inspect wordfish/build_logs)"
               exit 1
             fi
+
+            # back to repo root
             cd ..
           else
             echo "❌ src directory missing; cannot build"
@@ -127,20 +140,40 @@ jobs:
 
           # run perft tests (best-effort)
           if [ -d "tests" ]; then
+            echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
             cd ..
+          else
+            echo "⚠️ tests directory missing; skipping perft"
           fi
 
-          # copy built binary
+          # Copy the built binary to top-level engines folder (if found)
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          if [ -z "$BIN_PATH" ]; then
+            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
+          fi
+
           mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
+            echo "✅ Found built engine: $BIN_PATH"
             cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
             chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
             echo "✅ Engine copied to engines/wordfish"
           else
             echo "⚠️ No engine binary found after build"
           fi
+
+          # ensure build logs are available at repo root for artifact upload
+          if [ -d build_logs ]; then
+            cp -r build_logs "${GITHUB_WORKSPACE}/build_logs" || true
+          fi
+
+      - name: Upload wordfish build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordfish-build-logs
+          path: wordfish/build_logs
 
       - name: Setup Engines
         run: |
