@@ -178,71 +178,50 @@ jobs:
         if: always()
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-          shell: bash
-          uses: actions/upload-artifact@v4
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p engine_diagnose || true
-          cd engine_diagnose
+          mkdir -p build_logs || true
+          cd build_logs || true
 
-          # Paths
-          ENGINE_FILE="../engines/wordfish"
-          echo "Checking: $ENGINE_FILE"
+          ENGINE_FILE="${GITHUB_WORKSPACE}/engines/wordfish"
+          echo "Checking: $ENGINE_FILE" > engine_info.txt
 
-          # 1) Exists & executable?
           if [ ! -f "$ENGINE_FILE" ]; then
-            echo "ERROR: engine binary not found at $ENGINE_FILE"
-            ls -lah ../engines || true
+            echo "ERROR: engine binary not found at $ENGINE_FILE" | tee -a engine_info.txt
+            ls -lah "${GITHUB_WORKSPACE}/engines" >> engine_info.txt || true
             exit 2
           fi
-          ls -lah "$ENGINE_FILE"
-          chmod +x "$ENGINE_FILE" || true
 
-          # 2) File type (arch)
-          echo "--- file output ---" > engine_info.txt
-          file "$ENGINE_FILE" >> engine_info.txt 2>&1
+          ls -lah "$ENGINE_FILE" >> engine_info.txt 2>&1
+          file "$ENGINE_FILE" >> engine_info.txt 2>&1 || true
 
-          # 3) ldd (shared libs) - may fail on some systems; capture result
-          echo "--- ldd output ---" >> engine_info.txt
           if command -v ldd >/dev/null 2>&1; then
+            echo "---- ldd ----" >> engine_info.txt
             ldd "$ENGINE_FILE" >> engine_info.txt 2>&1 || true
-          else
-            echo "ldd not available" >> engine_info.txt
           fi
 
-          # 4) Run a UCI handshake simulation (capture stdout/stderr).
-          # Send UCI init, then isready (timeout 10s) then quit.
           echo "=== Running UCI handshake (stdout+stderr captured) ===" > engine_run.log
-          # Use a tiny timeout to avoid blocking if binary hangs (needs 'timeout' installed)
           if command -v timeout >/dev/null 2>&1; then
             timeout 15s bash -lc 'printf "uci\nisready\nquit\n" | '"$ENGINE_FILE"'' >> engine_run.log 2>&1 || true
           else
             bash -lc 'printf "uci\nisready\nquit\n" | '"$ENGINE_FILE"'' >> engine_run.log 2>&1 || true
           fi
 
-          # 5) If strace available, run short trace to see syscalls (may require apt install)
-          if command -v strace >/dev/null 2>&1; then
-            echo "=== strace short (first 200 lines) ===" >> engine_run.log
-            timeout 6s strace -o strace.log -f "$ENGINE_FILE" </dev/null || true
-            head -n 200 strace.log >> engine_run.log || true
-          else
-            echo "strace not installed; skipping strace" >> engine_run.log
-          fi
-
-          # Save logs for artifact upload
-          cp engine_info.txt ../build_logs/engine_info.txt || true
-          cp engine_run.log ../build_logs/engine_run.log || true
-          [ -f strace.log ] && cp strace.log ../build_logs/strace.log || true
-
-          echo "DIAGNOSTIC OUTPUT:"
-          tail -n 100 engine_run.log || true
+          # copy logs to workspace root build_logs (artifact step will upload this folder)
+          cp engine_info.txt ../build_logs/engine_info.txt 2>/dev/null || true
+          cp engine_run.log ../build_logs/engine_run.log 2>/dev/null || true
+          # echo short summary to console
+          echo "---- engine_run.log (tail) ----"
+          tail -n 80 engine_run.log || true
 
       - name: Upload engine diagnose logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: engine-diagnose-logs
-          path: wordfish/../build_logs
+          path: build_logs
+
 
       - name: Setup Engines
         run: |
