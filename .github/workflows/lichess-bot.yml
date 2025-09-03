@@ -178,8 +178,8 @@ jobs:
         if: always()
         env:
           GITHUB_WORKSPACE: ${{ github.workspace }}
-        shell: bash
-        uses: actions/upload-artifact@v4
+          shell: bash
+          uses: actions/upload-artifact@v4
         run: |
           set -euo pipefail
           mkdir -p engine_diagnose || true
