@@ -63,6 +63,7 @@ jobs:
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
+        shell: bash
         run: |
           set -euo pipefail
           rm -rf wordfish || true
@@ -107,9 +108,13 @@ jobs:
 
             echo "🔧 Building (no-LTO) - logging to ../build_logs/build.log"
 
-            # Perbaikan: gunakan blok kurawal untuk mengelompokkan pipeline sehingga `!` tidak
-            # membingungkan parser. pipefail sudah aktif sehingga exit code make akan diteruskan.
-            if ! { make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log; }; then
+            # --- Robust build: run make, tee output, then check exit code of `make`
+            set +e
+            make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log
+            MAKE_RC=${PIPESTATUS[0]}
+            set -e
+
+            if [ "${MAKE_RC}" -ne 0 ]; then
               echo "❌ Build failed — showing last 300 lines of build.log"
               tail -n 300 ../build_logs/build.log || true
 
@@ -157,6 +162,7 @@ jobs:
           if [ -d build_logs ]; then
             cp -r build_logs "${GITHUB_WORKSPACE}/build_logs" || true
           fi
+
 
 
       - name: Upload wordfish build logs
