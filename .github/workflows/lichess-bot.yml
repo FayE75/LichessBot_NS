@@ -64,17 +64,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install tenacity pyyaml
-      - name: Build wordfish (no-LTO, verbose)
+          
+      - name: Build wordfish (no-LTO, verbose - fixed)
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
+          #!/usr/bin/env bash
           set -euo pipefail
           rm -rf wordfish || true
 
-          # Clone (gunakan PAT jika tersedia, fallback ke public clone)
+          # Clone (gunakan PAT kalau tersedia)
           if [ -n "${WORDFISH_PAT:-}" ]; then
-            git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
+            git clone "https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git" wordfish
           else
             git clone https://github.com/FayE75/wordfish.git wordfish
           fi
@@ -114,9 +116,9 @@ jobs:
               find . -type f -name 'Makefile*' -exec sed -i.bak 's/-flto//g' {} +
             fi
 
-            # Run verbose build and capture log
             echo "🔧 Building (no-LTO) - logging to ../build_logs/build.log"
-            if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log; then
+            # use subshell for the pipeline to avoid parsing issues
+            if ! ( make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log ); then
               echo "❌ Build failed — showing last 300 lines of build.log"
               tail -n 300 ../build_logs/build.log || true
 
@@ -127,7 +129,7 @@ jobs:
                 file "$f" || true
               done || true
 
-              echo "❗ Build failed. Uploading logs as artifact is next step (or inspect wordfish/build_logs)"
+              echo "❗ Build failed. Build logs saved to wordfish/build_logs (artifact upload step should capture it)."
               exit 1
             fi
 
@@ -174,6 +176,7 @@ jobs:
         with:
           name: wordfish-build-logs
           path: wordfish/build_logs
+
 
       - name: Setup Engines
         run: |
