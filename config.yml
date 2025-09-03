@@ -3,7 +3,7 @@ token: "XXXXXXXXXXXXXXXXXXX"         # Lichess OAuth2 Token.
 engines:
   bullet:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "wordfish"                     # Binary name of the engine to use.
+    name: "sf"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 1.5         # Optimized for bullet games.
@@ -16,7 +16,7 @@ engines:
     limits:
   blitz:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "wordfish"                     # Binary name of the engine to use.
+    name: "sf"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 1.5         # Optimized for bullet games.
@@ -29,7 +29,7 @@ engines:
     limits:
   standard:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "wordfish"                     # Binary name of the engine to use.
+    name: "sf"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 1.5         # Optimized for bullet games.
@@ -42,7 +42,7 @@ engines:
     limits:
   chess960:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
-    name: "wordfish"                     # Binary name of the engine to use.
+    name: "sf"                     # Binary name of the engine to use.
     ponder: true                          # Think on opponent's time.
     silence_stderr: false                 # Suppresses stderr output.
     move_overhead_multiplier: 2.5         # Optimized for bullet games.
