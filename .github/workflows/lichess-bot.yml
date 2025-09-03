@@ -15,7 +15,7 @@ on:
           - normal
           - matchmaking
           - tournament
-        tournament_id:
+      tournament_id:
         description: 'Tournament ID (if tournament mode)'
         type: string
         required: false
