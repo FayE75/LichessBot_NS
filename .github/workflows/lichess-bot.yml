@@ -60,143 +60,85 @@ jobs:
           pip install -r requirements.txt
           pip install tenacity pyyaml
 
-      - name: Build wordfish (clone + build + perft) (LTO-compatible)
+      - name: Build wordfish (no-LTO, verbose) + upload logs
         env:
           WORDFISH_PAT: ${{ secrets.WORDFISH_PAT }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-prepare
+          path: build_logs || true
         run: |
           set -euo pipefail
           rm -rf wordfish || true
-
-          # Clone (use PAT for private repo)
-          if [ -z "${WORDFISH_PAT:-}" ]; then
-            echo "ERROR: WORDFISH_PAT secret is missing"; exit 1
-          fi
           git clone https://x-access-token:${WORDFISH_PAT}@github.com/FayE75/wordfish.git wordfish
-
-          # Install toolchain (try to install specific clang-18 stack; fallback to clang)
           sudo apt-get update -qq
-          # try to install versioned packages (may or may not exist on runner); ignore failure but continue
-          sudo apt-get install -y clang-18 lld-18 llvm-18-dev llvm-18 llvm-toolchain-18 pkg-config cmake ninja-build curl unzip || true
-          # Also install plain packages to ensure basic tools
           sudo apt-get install -y build-essential clang lld llvm-dev pkg-config cmake ninja-build curl unzip || true
 
           cd wordfish || { echo "wordfish dir missing"; exit 1; }
 
-          # optional network setup for NN files
+          # if project has scripts/net.sh
           if [ -f "scripts/net.sh" ]; then
             cd src && sh ../scripts/net.sh || true
             cd ..
           fi
 
-          # Build in src
+          # Enter src
           if [ -d "src" ]; then
             cd src
             mkdir -p ../build_logs
-            echo "🔧 Clean"
-            make clean || true
 
-            # Pick the best available clang/lld/llvm-ar/randlib
-            if command -v clang-18 >/dev/null 2>&1; then
-              export CC=clang-18
-              export CXX=clang++-18
-            elif command -v clang >/dev/null 2>&1; then
-              export CC=clang
-              export CXX=clang++
-            else
-              echo "ERROR: no clang found"; exit 1
+            echo "🔧 Forcing NON-LTO build: set -fno-lto and strip -flto from Makefiles if present"
+            export CC=clang
+            export CXX=clang++
+            export CFLAGS="-fno-lto ${CFLAGS:-}"
+            export CXXFLAGS="-fno-lto ${CXXFLAGS:-}"
+            export LDFLAGS="${LDFLAGS:-}"
+
+            # Try to remove any -flto occurrences in Makefile(s) as a fallback
+            # (some projects hardcode -flto in Makefile)
+            if grep -R --line-number --silent "\-flto" .; then
+              echo "⚠ Detected -flto in source Makefiles; stripping occurrences (in-place)"
+              # backup then remove -flto flags
+              find . -type f -name 'Makefile*' -exec sed -i.bak 's/-flto//g' {} +
             fi
 
-            # pick lld and llvm-ar / ranlib if available
-            if command -v lld-18 >/dev/null 2>&1; then
-              export LDFLAGS="-fuse-ld=lld-18 ${LDFLAGS:-}"
-            elif command -v lld >/dev/null 2>&1; then
-              export LDFLAGS="-fuse-ld=lld ${LDFLAGS:-}"
-            else
-              echo "WARNING: lld not found; linking may fallback to system ld"
-              export LDFLAGS="${LDFLAGS:-}"
-            fi
-
-            if command -v llvm-ar-18 >/dev/null 2>&1; then
-              export AR=llvm-ar-18
-            elif command -v llvm-ar >/dev/null 2>&1; then
-              export AR=llvm-ar
-            else
-              export AR=ar
-            fi
-
-            if command -v llvm-ranlib-18 >/dev/null 2>&1; then
-              export RANLIB=llvm-ranlib-18
-            elif command -v llvm-ranlib >/dev/null 2>&1; then
-              export RANLIB=llvm-ranlib
-            else
-              export RANLIB=ranlib
-            fi
-
-            echo "Using toolchain: CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LDFLAGS=$LDFLAGS"
-
-            # Make verbose and save logs
-            echo "🔧 Building (LTO-capable) - logging to ../build_logs/build.log"
+            echo "🔧 Running make verbose (V=1) — logs -> ../build_logs/build.log"
             if ! make -j2 build ARCH=x86-64-sse41-popcnt COMP=clang V=1 2>&1 | tee ../build_logs/build.log; then
               echo "❌ Build failed — showing last 400 lines of build.log"
               tail -n 400 ../build_logs/build.log || true
-
-              # Collect object file diagnostics (helpful to see bitcode vs ELF)
               echo "---- object files summary ----"
               ls -lah *.o || true
               for f in *.o 2>/dev/null || true; do
                 echo "---- file info for: $f ----"
                 file "$f" || true
-                echo "---- readelf header for: $f ----"
-                # readelf will print error for LLVM bitcode (that's okay)
-                readelf -h "$f" || true
               done || true
-
-              # Dump first few bytes of a failing object if present (useful to detect bitcode magic)
-              if [ -f tt.o ]; then
-                echo "---- tt.o hexdump (head) ----"
-                hexdump -C tt.o | sed -n '1,6p' || true
-              fi
-
-              echo "❗ Build failed. See build_logs/build.log for full output (attached to job workspace)."
+              # upload logs as action artifact for deeper inspection
+              echo "Uploading build logs as artifact..."
+              # use curl to the actions artifact API is complex here; better to fail and rely on next step to upload
               exit 1
             fi
-
-            # back to repo root
             cd ..
           else
             echo "❌ src directory missing; cannot build"
             exit 1
           fi
 
-          # Run perft tests if available (best-effort)
+          # run perft tests (best-effort)
           if [ -d "tests" ]; then
-            echo "▶️ Running tests/perft.sh (best-effort)"
             cd tests && bash perft.sh || true
             cd ..
-          else
-            echo "⚠️ tests directory missing; skipping perft"
           fi
 
-          # Find built binary and copy it to top-level engines folder
+          # copy built binary
           BIN_PATH=$(find . -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          if [ -z "$BIN_PATH" ]; then
-            BIN_PATH=$(find src -type f -executable -iname 'stockfish*' -o -iname 'wordfish*' -print -quit || true)
-          fi
-
           mkdir -p "${GITHUB_WORKSPACE}/engines"
           if [ -n "$BIN_PATH" ]; then
-            echo "✅ Found built engine: $BIN_PATH"
             cp "$BIN_PATH" "${GITHUB_WORKSPACE}/engines/wordfish" || true
             chmod +x "${GITHUB_WORKSPACE}/engines/wordfish" || true
             echo "✅ Engine copied to engines/wordfish"
           else
             echo "⚠️ No engine binary found after build"
-          fi
-
-          # Save build logs to workspace for later steps to upload if you add an artifact upload step
-          if [ -d build_logs ]; then
-            cp -r build_logs "${GITHUB_WORKSPACE}/build_logs" || true
           fi
 
 
