@@ -151,14 +151,14 @@ opening_books:
       names:
         # - owen_bullet
         # - nimas
-        - white_1
+        - white_3
     3+0_black:                             
       selection: best_move
       names:
         # - owen_bullet
         # - black_tournament
         # - nimas
-        - white_2
+        - white_1
         # - owen_rapid
     blitz_white:                             
       selection: weighted_random
