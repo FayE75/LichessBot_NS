@@ -339,9 +339,9 @@ online_moves:
 
 offer_draw:
   enabled: true                           # Activate whether the bot should offer draw.
-  score: 10                                # Tighter draw threshold - only accept truly equal positions.
-  consecutive_moves: 5                   # More moves required before considering draw.
-  min_game_length: 20                     # Later draw offers to avoid early draws.
+  score: 5                                # Tighter draw threshold - only accept truly equal positions.
+  consecutive_moves: 3                   # More moves required before considering draw.
+  min_game_length: 10                     # Later draw offers to avoid early draws.
   against_humans: false                    # Activate whether these settings should apply against humans.
   allow_in_tournaments: true             # Allow offering draws in tournaments even for 0.5+0 games. By default, draws are never offered in 0.5+0 games.
   accept_30_second_draws: true          
