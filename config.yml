@@ -157,7 +157,9 @@ opening_books:
       names:
         # - owen_bullet
         - black_tournament
-        # - nimas
+        - nimas
+        - small
+        - probook
         # - white_2
         # - owen_rapid
     blitz_white:                             
