@@ -150,7 +150,10 @@ opening_books:
       selection: best_move
       names:
         # - owen_bullet
+        - fayefish
         - nimas
+        - small
+        - probook
         # - white_1
     3+0_black:                             
       selection: best_move
@@ -493,4 +496,5 @@ books:
   white_tournament_1: "./books/std/White_tournament_1.bin"
   white_tournament_2: "./books/std/White_tournament_2.bin"
   black_tournament: "./books/std/black_tournament_1.bin"
+  fayefish: "./books/std/fayefish.bin"
 
