@@ -25,7 +25,7 @@ engines:
       Hash: 8192                           # Increased hash for better position evaluation.
       Move Overhead: 250                  # Reduced for faster bullet moves.
       Minimum Thinking Time: 0
-      Slow Mover: 20
+      Slow Mover: 75
     limits:
   standard:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
@@ -38,7 +38,7 @@ engines:
       Hash: 8192                           # Increased hash for better position evaluation.
       Move Overhead: 250                  # Reduced for faster bullet moves.
       Minimum Thinking Time: 0
-      Slow Mover: 25
+      Slow Mover: 75
     limits:
   chess960:                               # Engine used for standard chess and when no suitable special engine is configured.
     dir: "./engines"                      # Directory containing the engine.
